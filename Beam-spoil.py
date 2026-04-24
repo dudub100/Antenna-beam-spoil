@@ -27,26 +27,27 @@ d_v = lam / 2 # Vertical spacing (between the 4 rows)
 
 # --- Calculation Logic ---
 def get_patterns():
-    # Angles
     theta = np.linspace(-90, 90, 500)
     theta_rad = np.radians(theta)
     
-    # 1. Azimuth Pattern (Horizontal) - 2 Control Points
-    # AF_az = |1 + exp(j*(k*d_h*sin(theta) + delta))|
-    phase_rad = np.radians(phase_delta_deg)
-    psi_az = k * d_h * np.sin(theta_rad) + phase_rad
-    af_az = np.abs(1 + np.exp(1j * psi_az)) / 2
+    # Symmetric Phase: -phi/2 on left, +phi/2 on right
+    half_phase = np.radians(phase_delta_deg) / 2
     
-    # 2. Elevation Pattern (Vertical) - 4 Control Points (Unified Phase)
-    # Standard 4-element linear array factor
-    # AF_el = |sin(N*psi/2) / (N*sin(psi/2))|
+    # E1 = exp(-j * half_phase), E2 = exp(j * (k*d*sin(theta) + half_phase))
+    # This keeps the phase center at the physical center of the array
+    term1 = np.exp(-1j * half_phase)
+    term2 = np.exp(1j * (k * d_h * np.sin(theta_rad) + half_phase))
+    
+    af_az = np.abs(term1 + term2) / 2
+    
+    # Elevation remains the same (Symmetric by default if no tilt applied)
     psi_el = k * d_v * np.sin(theta_rad) 
-    # To avoid div by zero
     with np.errstate(divide='ignore', invalid='ignore'):
         af_el = np.abs(np.sin(4 * psi_el / 2) / (4 * np.sin(psi_el / 2)))
         af_el = np.nan_to_num(af_el, nan=1.0)
 
     return theta, 20 * np.log10(af_az + 1e-6), 20 * np.log10(af_el + 1e-6)
+
 
 theta, mag_az, mag_el = get_patterns()
 
