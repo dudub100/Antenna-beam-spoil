@@ -2,98 +2,66 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="FR2 Beam Analysis", layout="wide")
+st.set_page_config(page_title="FR2 Beam Widening", layout="wide")
 
-st.title("📡 31 GHz Antenna Array: Full Pattern Analysis")
-st.markdown("""
-This simulation combines the **Symmetric Array Factor** (from your 8-channel beamformer) 
-with a **Rectangular Patch Element Pattern**.
-""")
+st.title("📡 FR2 Azimuth Widening Tool (31 GHz)")
 
-# --- Sidebar Controls ---
-st.sidebar.header("1. Calibration (Baseline)")
-freq_ghz = st.sidebar.slider("Frequency (GHz)", 24.0, 40.0, 31.0)
-# Adjust this until Phase Delta 0 matches your native +/- 15 deg beamwidth
-d_over_lambda = st.sidebar.slider("Column Spacing (d/λ)", 0.5, 1.5, 1.15, 0.05)
+# --- Sidebar ---
+st.sidebar.header("1. Calibration")
+# Adjust d_lambda until Phase 0 shows your 30° baseline
+d_lambda = st.sidebar.slider("Column Spacing (d/λ)", 0.5, 2.0, 1.15, 0.01)
 
-st.sidebar.header("2. Element Characteristics")
-# n=1 is a standard patch, n=1.5 to 2 is more directive
-n_factor = st.sidebar.slider("Patch Directivity (cos^n)", 1.0, 3.0, 1.5, 0.1)
+st.sidebar.header("2. Beam Widening")
+# This is the "Divergence Phase"
+phase_div_deg = st.sidebar.slider("Divergence Phase (Deg)", 0, 180, 90)
 
-st.sidebar.header("3. Beam Control")
-phase_delta_deg = st.sidebar.slider("Total Phase Delta (Degrees)", 0, 180, 85)
-
-# --- Constants & Calculations ---
+# --- Physics ---
+freq = 31e9
 c = 3e8
-freq = freq_ghz * 1e9
 lam = c / freq
 k = 2 * np.pi / lam
-d_h = d_over_lambda * lam
+d = d_lambda * lam
 
 theta = np.linspace(-90, 90, 1000)
 theta_rad = np.radians(theta)
 
-# A. ELEMENT PATTERN (EP)
-# Standard patch approximation: cos^n(theta)
-# We mask negative values to 0 to simulate the ground plane (no back radiation)
-ep = np.where(np.cos(theta_rad) > 0, np.cos(theta_rad)**n_factor, 0)
+# 1. Element Pattern (Standard Patch)
+ep = np.cos(theta_rad)**1.5 
 
-# B. ARRAY FACTOR (AF)
-# Symmetric phase to keep boresight centered
-phi_rad = np.radians(phase_delta_deg)
-# AF for two points: |exp(-j*psi) + exp(j*psi)| / 2 = cos(psi)
-psi = (k * d_h * np.sin(theta_rad) + phi_rad) / 2
+# 2. Array Factor (Symmetric)
+# Applying -phi/2 to left and +phi/2 to right
+phi_rad = np.radians(phase_div_deg)
+# Resulting AF = |exp(-j*phi/2) + exp(j*(k*d*sin(theta) + phi/2))|
+# Normalized: cos((k*d*sin(theta) + phi) / 2)
+psi = (k * d * np.sin(theta_rad) + phi_rad) / 2
 af = np.abs(np.cos(psi))
 
-# C. TOTAL PATTERN
-total_pattern_linear = af * ep
-total_pattern_db = 20 * np.log10(total_pattern_linear + 1e-6)
+# 3. Total Pattern
+total_lin = af * ep
+total_db = 20 * np.log10(total_lin + 1e-6)
 
-# --- Find Beamwidth ---
-# Find indices where gain is above -3dB
-indices = np.where(total_pattern_db >= -3)[0]
-if len(indices) > 1:
-    bw_low = theta[indices[0]]
-    bw_high = theta[indices[-1]]
-    total_bw = bw_high - bw_low
-else:
-    bw_low = bw_high = total_bw = 0
+# --- Analysis ---
+indices = np.where(total_db >= -3)[0]
+bw = theta[indices[-1]] - theta[indices[0]] if len(indices) > 0 else 0
 
-# --- Plotting ---
-fig, ax = plt.subplots(figsize=(12, 6))
-
-# Plot Total Pattern
-ax.plot(theta, total_pattern_db, color='#FF4B4B', lw=3, label="Total Pattern (AF * EP)")
-# Plot Element Pattern for reference
-ax.plot(theta, 20 * np.log10(ep + 1e-6), color='gray', linestyle='--', alpha=0.5, label="Single Element Pattern")
-
-# Formatting
-ax.axhline(-3, color='black', linestyle=':', label="-3dB Threshold")
-ax.axvline(22.5, color='green', linestyle='--', alpha=0.6, label="Target ±22.5°")
-ax.axvline(-22.5, color='green', linestyle='--', alpha=0.6)
-
-ax.set_ylim([-30, 5])
+# --- Plot ---
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.plot(theta, total_db, color='red', lw=2, label="Resulting Beam")
+ax.axhline(-3, color='black', linestyle='--', alpha=0.5)
+ax.axvline(22.5, color='green', linestyle=':', label="Target ±22.5°")
+ax.axvline(-22.5, color='green', linestyle=':')
+ax.set_ylim([-25, 0])
 ax.set_xlim([-90, 90])
-ax.set_xlabel("Angle (Degrees)")
-ax.set_ylabel("Normalized Gain (dB)")
-ax.set_title(f"Radiation Pattern at {freq_ghz} GHz")
-ax.legend(loc='upper right')
-ax.grid(True, alpha=0.2)
-
+ax.set_ylabel("Gain (dB)")
+ax.set_xlabel("Angle (Deg)")
+ax.legend()
 st.pyplot(fig)
 
-# --- Metric Dashboard ---
-m1, m2, m3 = st.columns(3)
-m1.metric("Calculated Total BW", f"{total_bw:.1f}°")
-m2.metric("Left -3dB Point", f"{bw_low:.1f}°")
-m3.metric("Right -3dB Point", f"{bw_high:.1f}°")
+st.metric("Measured Beamwidth", f"{bw:.1f}°")
 
-st.divider()
-st.subheader("Implementation Steps for 45° Beam")
-st.write(f"""
-1. **Calibrate:** Set Phase to 0 and adjust **Column Spacing** until BW is 30°.
-2. **Broaden:** Increase **Phase Delta** until Total BW hits 45°.
-3. **Register Settings:**
-    * **Channels 1-4:** Apply Phase **{-phase_delta_deg/2:.1f}°**
-    * **Channels 5-8:** Apply Phase **{phase_delta_deg/2:.1f}°**
+st.info(f"""
+**Action Plan:**
+1. Keep **CH 1-4** at phase $0^\circ$.
+2. Set **CH 5-8** to phase ${phase_div_deg}^\circ$.
+3. This creates the divergence needed to hit {bw:.1f}°.
 """)
