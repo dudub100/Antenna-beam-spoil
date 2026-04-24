@@ -2,66 +2,77 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="FR2 Beam Widening", layout="wide")
-
-st.title("📡 FR2 Azimuth Widening Tool (31 GHz)")
+st.set_page_config(layout="wide")
+st.title("📡 FR2 Symmetric Beam Broadening (31 GHz)")
 
 # --- Sidebar ---
-st.sidebar.header("1. Calibration")
-# Adjust d_lambda until Phase 0 shows your 30° baseline
-d_lambda = st.sidebar.slider("Column Spacing (d/λ)", 0.5, 2.0, 1.15, 0.01)
+st.sidebar.header("1. Physical Setup")
+freq_ghz = st.sidebar.number_input("Frequency (GHz)", value=31.0)
+# Adjust this to get your 30° baseline (typically 1.0 to 1.2)
+d_lam = st.sidebar.slider("Sub-array Spacing (d/λ)", 0.5, 2.0, 1.15, 0.01)
 
-st.sidebar.header("2. Beam Widening")
-# This is the "Divergence Phase"
-phase_div_deg = st.sidebar.slider("Divergence Phase (Deg)", 0, 180, 90)
+st.sidebar.header("2. Element Pattern (Patch)")
+n_pow = st.sidebar.slider("Patch Directivity (cos^n)", 1.0, 3.0, 1.5)
 
-# --- Physics ---
-freq = 31e9
+st.sidebar.header("3. Broadening Control")
+# This is the total phase DIFFERENCE between the two columns
+delta_phi = st.sidebar.slider("Phase Delta (Degrees)", 0, 180, 0)
+
+# --- Calculations ---
 c = 3e8
-lam = c / freq
+lam = c / (freq_ghz * 1e9)
 k = 2 * np.pi / lam
-d = d_lambda * lam
+d = d_lam * lam
 
 theta = np.linspace(-90, 90, 1000)
 theta_rad = np.radians(theta)
 
-# 1. Element Pattern (Standard Patch)
-ep = np.cos(theta_rad)**1.5 
+# A. ELEMENT PATTERN (EP)
+# The "envelope" of a single patch element
+ep_lin = np.where(np.cos(theta_rad) > 0, np.cos(theta_rad)**n_pow, 0)
+ep_db = 20 * np.log10(ep_lin + 1e-6)
 
-# 2. Array Factor (Symmetric)
-# Applying -phi/2 to left and +phi/2 to right
-phi_rad = np.radians(phase_div_deg)
-# Resulting AF = |exp(-j*phi/2) + exp(j*(k*d*sin(theta) + phi/2))|
-# Normalized: cos((k*d*sin(theta) + phi) / 2)
+# B. SYMMETRIC ARRAY FACTOR (AF)
+# We apply phase symmetrically to prevent steering
+phi_rad = np.radians(delta_phi)
+# AF = | exp(-j*(kd/2*sin(theta) + phi/2)) + exp(j*(kd/2*sin(theta) + phi/2)) | / 2
+# Simplifies to: cos( (k*d*sin(theta) + phi) / 2 )
 psi = (k * d * np.sin(theta_rad) + phi_rad) / 2
-af = np.abs(np.cos(psi))
+af_lin = np.abs(np.cos(psi))
+af_db = 20 * np.log10(af_lin + 1e-6)
 
-# 3. Total Pattern
-total_lin = af * ep
+# C. TOTAL PATTERN
+total_lin = af_lin * ep_lin
 total_db = 20 * np.log10(total_lin + 1e-6)
 
-# --- Analysis ---
-indices = np.where(total_db >= -3)[0]
-bw = theta[indices[-1]] - theta[indices[0]] if len(indices) > 0 else 0
+# --- Beamwidth Calculation ---
+try:
+    # Find -3dB points relative to the PEAK of the total pattern
+    peak_val = np.max(total_db)
+    idx = np.where(total_db >= (peak_val - 3))[0]
+    bw = theta[idx[-1]] - theta[idx[0]]
+except:
+    bw = 0
 
-# --- Plot ---
+# --- Plotting ---
 fig, ax = plt.subplots(figsize=(10, 5))
-ax.plot(theta, total_db, color='red', lw=2, label="Resulting Beam")
-ax.axhline(-3, color='black', linestyle='--', alpha=0.5)
-ax.axvline(22.5, color='green', linestyle=':', label="Target ±22.5°")
-ax.axvline(-22.5, color='green', linestyle=':')
-ax.set_ylim([-25, 0])
+ax.plot(theta, total_db, color='red', lw=3, label="Total Pattern (Array)")
+ax.plot(theta, ep_db, color='blue', lw=1, ls='--', label="Single Element Pattern")
+
+ax.axhline(np.max(total_db) - 3, color='black', ls=':', label="-3dB level")
+ax.axvline(22.5, color='green', ls='--', alpha=0.5, label="Target ±22.5°")
+ax.axvline(-22.5, color='green', ls='--', alpha=0.5)
+
+ax.set_ylim([-30, 5])
 ax.set_xlim([-90, 90])
+ax.set_title(f"Symmetric Beam at {freq_ghz} GHz | BW: {bw:.1f}°")
+ax.set_xlabel("Azimuth Angle (Degrees)")
 ax.set_ylabel("Gain (dB)")
-ax.set_xlabel("Angle (Deg)")
 ax.legend()
+ax.grid(True, alpha=0.2)
+
 st.pyplot(fig)
 
-st.metric("Measured Beamwidth", f"{bw:.1f}°")
-
-st.info(f"""
-**Action Plan:**
-1. Keep **CH 1-4** at phase $0^\circ$.
-2. Set **CH 5-8** to phase ${phase_div_deg}^\circ$.
-3. This creates the divergence needed to hit {bw:.1f}°.
-""")
+# --- Results ---
+st.write(f"**Current Beamwidth:** {bw:.1f}°")
+st.info(f"To achieve this, set Channels 1-4 to **{-delta_phi/2}°** and Channels 5-8 to **{delta_phi/2}°**.")
